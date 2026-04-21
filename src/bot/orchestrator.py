@@ -328,6 +328,7 @@ class MessageOrchestrator:
             ("verbose", self.agentic_verbose),
             ("repo", self.agentic_repo),
             ("restart", command.restart_command),
+            ("voice", self.agentic_voice_toggle),
         ]
         if self.settings.enable_project_threads:
             handlers.append(("sync_threads", command.sync_threads))
@@ -460,6 +461,7 @@ class MessageOrchestrator:
                 BotCommand("status", "Show session status"),
                 BotCommand("verbose", "Set output verbosity (0/1/2)"),
                 BotCommand("repo", "List repos / switch workspace"),
+                BotCommand("voice", "Toggle voice replies (on/off/always)"),
                 BotCommand("restart", "Restart the bot"),
             ]
             if self.settings.enable_project_threads:
@@ -1386,6 +1388,46 @@ class MessageOrchestrator:
                 "Claude photo processing failed", error=str(e), user_id=user_id
             )
 
+    async def agentic_voice_toggle(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Toggle TTS voice reply mode: /voice on | off | only"""
+        args = (update.message.text or "").split()
+        # Current state
+        current = context.user_data.get("tts_mode", self.settings.tts_reply_mode)
+
+        if len(args) < 2:
+            # Show current status
+            status_map = {
+                "voice_only": "🔊 ON — voice replies when you send voice",
+                "always": "🔊 ON — voice replies to every message",
+                "never": "🔇 OFF — text only",
+            }
+            status = status_map.get(current, current)
+            await update.message.reply_text(
+                f"Voice reply: {status}\n\n"
+                "Usage:\n"
+                "• /voice on — reply with voice when you send voice\n"
+                "• /voice off — text only\n"
+                "• /voice always — voice reply to every message",
+            )
+            return
+
+        mode = args[1].lower()
+        if mode in ("on", "yes", "1"):
+            context.user_data["tts_mode"] = "voice_only"
+            await update.message.reply_text("🔊 Voice replies ON (when you send voice)")
+        elif mode in ("off", "no", "0"):
+            context.user_data["tts_mode"] = "never"
+            await update.message.reply_text("🔇 Voice replies OFF")
+        elif mode == "always":
+            context.user_data["tts_mode"] = "always"
+            await update.message.reply_text("🔊 Voice replies ON (every message)")
+        else:
+            await update.message.reply_text(
+                "Usage: /voice on | off | always"
+            )
+
     async def agentic_voice(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
@@ -1410,7 +1452,7 @@ class MessageOrchestrator:
             )
 
             await progress_msg.edit_text("Working...")
-            await self._handle_agentic_media_message(
+            response_text = await self._handle_agentic_media_message(
                 update=update,
                 context=context,
                 prompt=processed_voice.prompt,
@@ -1418,6 +1460,37 @@ class MessageOrchestrator:
                 user_id=user_id,
                 chat=chat,
             )
+
+            # --- TTS voice reply ---
+            tts_handler = features.get_tts_handler() if features else None
+            tts_mode = context.user_data.get("tts_mode", self.settings.tts_reply_mode)
+            if (
+                tts_handler
+                and response_text
+                and tts_mode in ("voice_only", "always")
+            ):
+                try:
+                    import io as _io
+
+                    ogg_bytes = await tts_handler.synthesize(response_text)
+                    if ogg_bytes:
+                        voice_file = _io.BytesIO(ogg_bytes)
+                        voice_file.name = "reply.ogg"
+                        await update.message.reply_voice(
+                            voice=voice_file,
+                            reply_to_message_id=update.message.message_id,
+                        )
+                        logger.info(
+                            "TTS voice reply sent",
+                            user_id=user_id,
+                            audio_size=len(ogg_bytes),
+                        )
+                except Exception as tts_err:
+                    logger.warning(
+                        "TTS voice reply failed (text was still sent)",
+                        error=str(tts_err),
+                        user_id=user_id,
+                    )
 
         except Exception as e:
             from .handlers.message import _format_error_message
@@ -1437,14 +1510,17 @@ class MessageOrchestrator:
         user_id: int,
         chat: Any,
         images: Optional[List[Dict[str, str]]] = None,
-    ) -> None:
-        """Run a media-derived prompt through Claude and send responses."""
+    ) -> str:
+        """Run a media-derived prompt through Claude and send responses.
+
+        Returns the full response text (for TTS or other post-processing).
+        """
         claude_integration = context.bot_data.get("claude_integration")
         if not claude_integration:
             await progress_msg.edit_text(
                 "Claude integration not available. Check configuration."
             )
-            return
+            return ""
 
         current_dir = context.user_data.get(
             "current_directory", self.settings.approved_directory
@@ -1539,6 +1615,9 @@ class MessageOrchestrator:
                     )
                 except Exception as img_err:
                     logger.warning("Image send failed", error=str(img_err))
+
+        # Return full response text (used by TTS in agentic_voice)
+        return " ".join(m.text for m in formatted_messages if m.text)
 
     async def _handle_unknown_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
