@@ -16,6 +16,7 @@ from .git_integration import GitIntegration
 from .image_handler import ImageHandler
 from .quick_actions import QuickActionManager
 from .session_export import SessionExporter
+from .tts_handler import TTSHandler
 from .voice_handler import VoiceHandler
 
 logger = structlog.get_logger(__name__)
@@ -91,6 +92,17 @@ class FeatureRegistry:
             except Exception as e:
                 logger.error("Failed to initialize voice handler", error=str(e))
 
+        # TTS (Text-to-Speech) via Fish Audio
+        if self.config.tts_enabled and self.config.tts_fish_api_key:
+            try:
+                self.features["tts_handler"] = TTSHandler(config=self.config)
+                logger.info(
+                    "TTS handler feature enabled",
+                    model_id=self.config.tts_fish_model_id,
+                )
+            except Exception as e:
+                logger.error("Failed to initialize TTS handler", error=str(e))
+
         # Conversation enhancements - skip in agentic mode
         if not self.config.agentic_mode:
             try:
@@ -135,6 +147,10 @@ class FeatureRegistry:
     def get_voice_handler(self) -> Optional[VoiceHandler]:
         """Get voice handler feature"""
         return self.get_feature("voice_handler")
+
+    def get_tts_handler(self) -> Optional[TTSHandler]:
+        """Get TTS handler feature"""
+        return self.get_feature("tts_handler")
 
     def get_conversation_enhancer(self) -> Optional[ConversationEnhancer]:
         """Get conversation enhancer feature"""

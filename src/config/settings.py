@@ -242,6 +242,27 @@ class Settings(BaseSettings):
             "Named models resolve to ~/.cache/whisper-cpp/ggml-{name}.bin"
         ),
     )
+    # TTS (Text-to-Speech) via Fish Audio
+    tts_enabled: bool = Field(
+        False, description="Enable TTS voice replies (requires Fish Audio API key)"
+    )
+    tts_fish_api_key: Optional[SecretStr] = Field(
+        None, description="Fish Audio API key for TTS"
+    )
+    tts_fish_model_id: Optional[str] = Field(
+        None,
+        description="Fish Audio voice model ID (reference_id for voice selection)",
+    )
+    tts_reply_mode: Literal["voice_only", "always", "never"] = Field(
+        "voice_only",
+        description=(
+            "When to send TTS voice replies: "
+            "'voice_only' = only when user sends voice, "
+            "'always' = every message, "
+            "'never' = disabled"
+        ),
+    )
+
     enable_quick_actions: bool = Field(True, description="Enable quick action buttons")
     agentic_mode: bool = Field(
         True,
@@ -578,6 +599,13 @@ class Settings(BaseSettings):
         if self.voice_provider == "local":
             return "Local whisper.cpp"
         return "Mistral Voxtral"
+
+    @property
+    def tts_fish_api_key_str(self) -> Optional[str]:
+        """Get Fish Audio API key as string."""
+        return (
+            self.tts_fish_api_key.get_secret_value() if self.tts_fish_api_key else None
+        )
 
     @property
     def resolved_whisper_cpp_binary(self) -> str:

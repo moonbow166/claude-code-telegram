@@ -1090,6 +1090,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
             await progress_msg.delete()
 
+            # Collect full response text for TTS
+            full_response_text = " ".join(
+                msg.text for msg in formatted_messages if msg.text
+            )
+
             for i, message in enumerate(formatted_messages):
                 await update.message.reply_text(
                     message.text,
@@ -1099,6 +1104,35 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 )
                 if i < len(formatted_messages) - 1:
                     await asyncio.sleep(0.5)
+
+            # --- TTS voice reply (only when user sent a voice message) ---
+            tts_handler = features.get_tts_handler() if features else None
+            if tts_handler and full_response_text:
+                tts_mode = settings.tts_reply_mode
+                should_tts = tts_mode == "always" or tts_mode == "voice_only"
+                if should_tts:
+                    try:
+                        ogg_bytes = await tts_handler.synthesize(full_response_text)
+                        if ogg_bytes:
+                            import io
+
+                            voice_file = io.BytesIO(ogg_bytes)
+                            voice_file.name = "reply.ogg"
+                            await update.message.reply_voice(
+                                voice=voice_file,
+                                reply_to_message_id=update.message.message_id,
+                            )
+                            logger.info(
+                                "TTS voice reply sent",
+                                user_id=user_id,
+                                audio_size=len(ogg_bytes),
+                            )
+                    except Exception as tts_err:
+                        logger.warning(
+                            "TTS voice reply failed (text was still sent)",
+                            error=str(tts_err),
+                            user_id=user_id,
+                        )
 
         except Exception as e:
             await progress_msg.edit_text(_format_error_message(e), parse_mode="HTML")
